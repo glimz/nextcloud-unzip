@@ -119,6 +119,15 @@
 					resolve(false);
 				},
 				error: function (xhr) {
+					// Some deployments (reverse proxies) will return a 504 even though PHP continues
+					// processing and the extraction may still complete. Treat this as "in progress".
+					if (xhr && (xhr.status === 504 || xhr.status === 502)) {
+						notify('Extraction started, but the request timed out. Refresh this folder in a moment.');
+						setTimeout(refreshFilesView, 8000);
+						setTimeout(refreshFilesView, 30000);
+						resolve(false);
+						return;
+					}
 					try {
 						const desc = (xhr && xhr.responseJSON && xhr.responseJSON.desc) ? xhr.responseJSON.desc : null;
 						if (desc) {

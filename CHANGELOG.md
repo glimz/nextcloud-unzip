@@ -30,3 +30,7 @@
 ## 1.0.5
 
 - Extract into a new folder named after the archive (with “(1)” suffix on conflicts), matching the behavior of the classic `extract` app.
+
+## 1.0.6
+
+- Handle proxy timeouts (HTTP 504/502) gracefully in the UI: show “still running” message and auto-refresh.
