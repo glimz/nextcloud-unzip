@@ -7,3 +7,7 @@
 - CSRF-safe extraction request.
 - Server-side archive preflight safety checks.
 
+## 1.0.1
+
+- Support extracting archives from non-local storages (e.g. external mounts) by extracting to a temp dir then importing into the target folder.
+- Show server JSON error messages in the UI on HTTP 400 responses.

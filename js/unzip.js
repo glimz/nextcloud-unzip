@@ -102,8 +102,20 @@
 					notify((response && response.desc) ? response.desc : 'Extraction failed');
 					resolve(false);
 				},
-				error: function () {
-					notify('Extraction request failed');
+				error: function (xhr) {
+					try {
+						const desc = (xhr && xhr.responseJSON && xhr.responseJSON.desc) ? xhr.responseJSON.desc : null;
+						if (desc) {
+							notify(desc);
+						} else if (xhr && typeof xhr.responseText === 'string') {
+							const parsed = JSON.parse(xhr.responseText);
+							notify((parsed && parsed.desc) ? parsed.desc : 'Extraction request failed');
+						} else {
+							notify('Extraction request failed');
+						}
+					} catch (_e) {
+						notify('Extraction request failed');
+					}
 					resolve(false);
 				},
 			});

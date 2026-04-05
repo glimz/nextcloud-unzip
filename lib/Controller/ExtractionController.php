@@ -4,12 +4,12 @@ declare(strict_types=1);
 
 namespace OCA\Unzip\Controller;
 
-use OC\Files\Filesystem;
 use OCA\Unzip\Service\ExtractionService;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http\Attribute\NoAdminRequired;
 use OCP\AppFramework\Http\DataResponse;
 use OCP\Constants;
+use OC\Files\Filesystem;
 use OCP\Files\File;
 use OCP\Files\Folder;
 use OCP\Files\IRootFolder;
@@ -68,11 +68,6 @@ class ExtractionController extends Controller {
 			return new DataResponse(['code' => 0, 'desc' => 'Missing permission to create files in target folder'], 403);
 		}
 
-		$archivePath = $archiveNode->getStorage()->getLocalFile($archiveNode->getInternalPath());
-		if (!is_string($archivePath) || $archivePath === '' || !is_file($archivePath)) {
-			return new DataResponse(['code' => 0, 'desc' => 'Archive is not available on local storage'], 400);
-		}
-
 		$detectedType = $this->detectType($archiveNode->getName(), $archiveNode->getMimeType());
 		if ($detectedType === null) {
 			// Fall back to client-supplied type for edge cases, but prefer server-side detection.
@@ -84,7 +79,6 @@ class ExtractionController extends Controller {
 
 		$folderName = $this->makeTargetFolderName($archiveNode->getName(), $parent);
 		$targetNode = $parent->newFolder($folderName);
-		$targetPath = $targetNode->getStorage()->getLocalFile($targetNode->getInternalPath());
 
 		$this->logger->info('unzip.extract start', [
 			'app' => 'unzip',
@@ -95,17 +89,33 @@ class ExtractionController extends Controller {
 			'targetFolder' => $targetNode->getName(),
 		]);
 
-		$response = $this->extractionService->extractByType($archivePath, $targetPath, $detectedType);
-		if (($response['code'] ?? 0) !== 1) {
+		$tmpArchive = null;
+		$tmpExtractDir = null;
+		try {
+			[$tmpArchive, $tmpExtractDir] = $this->prepareTempExtraction($archiveNode);
+
+			$response = $this->extractionService->extractByType($tmpArchive, $tmpExtractDir, $detectedType);
+			if (($response['code'] ?? 0) !== 1) {
+				return new DataResponse($response, 400);
+			}
+
+			$this->importExtractedTree($tmpExtractDir, $targetNode);
+		} catch (\Throwable $e) {
+			$this->logger->error('unzip.extract failed: ' . $e->getMessage(), ['app' => 'unzip']);
 			try {
 				$targetNode->delete();
-			} catch (\Throwable $e) {
-				$this->logger->warning('Failed to cleanup target folder after extraction failure: ' . $e->getMessage());
+			} catch (\Throwable $cleanupError) {
+				$this->logger->warning('Failed to cleanup target folder after extraction failure: ' . $cleanupError->getMessage());
 			}
-			return new DataResponse($response, 400);
+			return new DataResponse(['code' => 0, 'desc' => 'Extraction failed'], 400);
+		} finally {
+			if (is_string($tmpArchive) && $tmpArchive !== '' && is_file($tmpArchive)) {
+				@unlink($tmpArchive);
+			}
+			if (is_string($tmpExtractDir) && $tmpExtractDir !== '' && is_dir($tmpExtractDir)) {
+				$this->deleteDirectoryRecursive($tmpExtractDir);
+			}
 		}
-
-		$this->removeBlacklistedFiles($targetPath);
 
 		try {
 			$targetNode->getStorage()->getScanner()->scan($targetNode->getInternalPath(), true);
@@ -113,7 +123,134 @@ class ExtractionController extends Controller {
 			$this->logger->warning('Extraction scan warning: ' . $e->getMessage());
 		}
 
-			return new DataResponse(['code' => 1, 'folder' => $targetNode->getName()]);
+		return new DataResponse(['code' => 1, 'folder' => $targetNode->getName()]);
+	}
+
+	/**
+	 * @return array{0:string,1:string} [tmpArchivePath, tmpExtractDir]
+	 */
+	private function prepareTempExtraction(File $archiveNode): array {
+		$tmpDir = rtrim((string)sys_get_temp_dir(), DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'nc-unzip-' . bin2hex(random_bytes(8));
+		if (!@mkdir($tmpDir, 0700, true) && !is_dir($tmpDir)) {
+			throw new \RuntimeException('Unable to create temporary directory');
+		}
+
+		$tmpArchivePath = $tmpDir . DIRECTORY_SEPARATOR . 'archive';
+		$in = $archiveNode->fopen('r');
+		if (!is_resource($in)) {
+			throw new \RuntimeException('Unable to read archive');
+		}
+		$out = @fopen($tmpArchivePath, 'wb');
+		if (!is_resource($out)) {
+			@fclose($in);
+			throw new \RuntimeException('Unable to create temporary archive file');
+		}
+		stream_copy_to_stream($in, $out);
+		@fclose($in);
+		@fclose($out);
+
+		$tmpExtractDir = $tmpDir . DIRECTORY_SEPARATOR . 'extract';
+		if (!@mkdir($tmpExtractDir, 0700, true) && !is_dir($tmpExtractDir)) {
+			throw new \RuntimeException('Unable to create temporary extraction directory');
+		}
+
+		return [$tmpArchivePath, $tmpExtractDir];
+	}
+
+	private function importExtractedTree(string $extractDir, Folder $targetFolder): void {
+		$iterator = new \RecursiveIteratorIterator(
+			new \RecursiveDirectoryIterator($extractDir, \FilesystemIterator::SKIP_DOTS),
+			\RecursiveIteratorIterator::SELF_FIRST
+		);
+
+		foreach ($iterator as $node) {
+			/** @var \SplFileInfo $node */
+			$fullPath = $node->getPathname();
+			$relativePath = substr($fullPath, strlen(rtrim($extractDir, DIRECTORY_SEPARATOR)) + 1);
+			$relativePath = str_replace('\\', '/', $relativePath);
+			if ($relativePath === '' || str_contains($relativePath, "\0") || str_contains($relativePath, '../') || str_starts_with($relativePath, '../')) {
+				continue;
+			}
+
+			if ($node->isDir()) {
+				$this->ensureFolder($targetFolder, $relativePath);
+				continue;
+			}
+
+			$dirName = str_contains($relativePath, '/') ? dirname($relativePath) : '.';
+			$fileName = basename($relativePath);
+			if (Filesystem::isFileBlacklisted($fileName)) {
+				continue;
+			}
+			$destFolder = $dirName === '.' ? $targetFolder : $this->ensureFolder($targetFolder, $dirName);
+			$safeName = $fileName;
+			$suffix = 1;
+			while ($destFolder->nodeExists($safeName)) {
+				$base = pathinfo($fileName, PATHINFO_FILENAME);
+				$ext = pathinfo($fileName, PATHINFO_EXTENSION);
+				$safeName = $base . ' (' . $suffix . ')' . ($ext !== '' ? ('.' . $ext) : '');
+				$suffix++;
+			}
+			$newFile = $destFolder->newFile($safeName);
+
+			$in = @fopen($fullPath, 'rb');
+			if (!is_resource($in)) {
+				throw new \RuntimeException('Unable to read extracted file');
+			}
+			$out = $newFile->fopen('w');
+			if (!is_resource($out)) {
+				@fclose($in);
+				throw new \RuntimeException('Unable to write extracted file');
+			}
+			stream_copy_to_stream($in, $out);
+			@fclose($in);
+			@fclose($out);
+		}
+	}
+
+	private function ensureFolder(Folder $base, string $path): Folder {
+		$path = trim($path, '/');
+		if ($path === '') {
+			return $base;
+		}
+		$parts = array_values(array_filter(explode('/', $path), static fn ($p) => $p !== '' && $p !== '.' && $p !== '..'));
+		$current = $base;
+		foreach ($parts as $part) {
+			if ($current->nodeExists($part)) {
+				$existing = $current->get($part);
+				if ($existing instanceof Folder) {
+					$current = $existing;
+					continue;
+				}
+				// Name collision: create a safe folder name.
+				$suffix = 1;
+				$newName = $part . ' (' . $suffix . ')';
+				while ($current->nodeExists($newName)) {
+					$suffix++;
+					$newName = $part . ' (' . $suffix . ')';
+				}
+				$current = $current->newFolder($newName);
+				continue;
+			}
+			$current = $current->newFolder($part);
+		}
+		return $current;
+	}
+
+	private function deleteDirectoryRecursive(string $dir): void {
+		$iterator = new \RecursiveIteratorIterator(
+			new \RecursiveDirectoryIterator($dir, \FilesystemIterator::SKIP_DOTS),
+			\RecursiveIteratorIterator::CHILD_FIRST
+		);
+		foreach ($iterator as $node) {
+			/** @var \SplFileInfo $node */
+			if ($node->isDir()) {
+				@rmdir($node->getPathname());
+			} else {
+				@unlink($node->getPathname());
+			}
+		}
+		@rmdir($dir);
 	}
 
 	private function detectType(string $name, string $mimeType): ?string {
@@ -152,17 +289,5 @@ class ExtractionController extends Controller {
 			$counter++;
 		}
 		return $name;
-	}
-
-	private function removeBlacklistedFiles(string $extractTo): void {
-		$iterator = new \RecursiveIteratorIterator(
-			new \RecursiveDirectoryIterator($extractTo, \FilesystemIterator::SKIP_DOTS)
-		);
-		foreach ($iterator as $file) {
-			/** @var \SplFileInfo $file */
-			if (Filesystem::isFileBlacklisted($file->getBasename())) {
-				@unlink($file->getPathname());
-			}
-		}
 	}
 }
