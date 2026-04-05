@@ -20,3 +20,9 @@
 ## 1.0.3
 
 - Refresh Files view after extracting (fallback to full page reload on Files v4).
+
+## 1.0.4
+
+- Skip macOS metadata (`__MACOSX`, `._*`, `.DS_Store`) during import.
+- Include skipped count in the UI.
+- Improve server response for “nothing extracted” cases.

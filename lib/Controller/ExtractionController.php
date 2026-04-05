@@ -99,7 +99,7 @@ class ExtractionController extends Controller {
 
 			$importStats = $this->importExtractedTree($tmpExtractDir, $parent);
 		} catch (\Throwable $e) {
-			$this->logger->error('unzip.extract failed: ' . $e->getMessage(), ['app' => 'unzip']);
+			$this->logger->error('unzip.extract failed: ' . $e->getMessage(), ['app' => 'unzip', 'exception' => $e]);
 			return new DataResponse(['code' => 0, 'desc' => 'Extraction failed'], 400);
 		} finally {
 			if (is_string($tmpArchive) && $tmpArchive !== '' && is_file($tmpArchive)) {
@@ -110,18 +110,39 @@ class ExtractionController extends Controller {
 			}
 		}
 
-		try {
-			$parent->getStorage()->getScanner()->scan($parent->getInternalPath(), true);
-		} catch (\Throwable $e) {
-			$this->logger->warning('Extraction scan warning: ' . $e->getMessage());
+		$files = (int)($importStats['files'] ?? 0);
+		$folders = (int)($importStats['folders'] ?? 0);
+		$skipped = (int)($importStats['skipped'] ?? 0);
+
+		$this->logger->info('unzip.extract done', [
+			'app' => 'unzip',
+			'user' => $this->userId,
+			'fileId' => $fileId,
+			'archive' => $archiveNode->getName(),
+			'targetFolder' => $parent->getName(),
+			'files' => $files,
+			'folders' => $folders,
+			'skipped' => $skipped,
+		]);
+
+		if ($files === 0 && $folders === 0) {
+			$desc = 'Nothing extracted';
+			if ($skipped > 0) {
+				$desc = 'Nothing extracted (all entries were skipped)';
+			}
+			return new DataResponse(['code' => 0, 'desc' => $desc, 'skipped' => $skipped]);
 		}
 
-		return new DataResponse([
+		$response = [
 			'code' => 1,
-			'files' => (int)($importStats['files'] ?? 0),
-			'folders' => (int)($importStats['folders'] ?? 0),
-			'skipped' => (int)($importStats['skipped'] ?? 0),
-		]);
+			'files' => $files,
+			'folders' => $folders,
+			'skipped' => $skipped,
+		];
+		if ($skipped > 0) {
+			$response['desc'] = 'Some entries were skipped';
+		}
+		return new DataResponse($response);
 	}
 
 	/**
@@ -175,42 +196,70 @@ class ExtractionController extends Controller {
 				continue;
 			}
 
+			$segments = array_values(array_filter(explode('/', $relativePath), static fn ($p) => $p !== ''));
+			if (in_array('__MACOSX', $segments, true)) {
+				$stats['skipped']++;
+				continue;
+			}
+
 			if ($node->isDir()) {
-				$this->ensureFolder($targetFolder, $relativePath);
-				$stats['folders']++;
+				try {
+					$this->ensureFolder($targetFolder, $relativePath);
+					$stats['folders']++;
+				} catch (\Throwable $e) {
+					$this->logger->warning('unzip.import folder failed', ['app' => 'unzip', 'path' => $relativePath, 'exception' => $e]);
+					$stats['skipped']++;
+				}
 				continue;
 			}
 
 			$dirName = str_contains($relativePath, '/') ? dirname($relativePath) : '.';
 			$fileName = basename($relativePath);
+			if ($fileName === '.DS_Store' || str_starts_with($fileName, '._')) {
+				$stats['skipped']++;
+				continue;
+			}
 			if (Filesystem::isFileBlacklisted($fileName)) {
 				$stats['skipped']++;
 				continue;
 			}
-			$destFolder = $dirName === '.' ? $targetFolder : $this->ensureFolder($targetFolder, $dirName);
-			$safeName = $fileName;
-			$suffix = 1;
-			while ($destFolder->nodeExists($safeName)) {
-				$base = pathinfo($fileName, PATHINFO_FILENAME);
-				$ext = pathinfo($fileName, PATHINFO_EXTENSION);
-				$safeName = $base . ' (' . $suffix . ')' . ($ext !== '' ? ('.' . $ext) : '');
-				$suffix++;
-			}
-			$newFile = $destFolder->newFile($safeName);
+			$newFile = null;
+			try {
+				$destFolder = $dirName === '.' ? $targetFolder : $this->ensureFolder($targetFolder, $dirName);
+				$safeName = $fileName;
+				$suffix = 1;
+				while ($destFolder->nodeExists($safeName)) {
+					$base = pathinfo($fileName, PATHINFO_FILENAME);
+					$ext = pathinfo($fileName, PATHINFO_EXTENSION);
+					$safeName = $base . ' (' . $suffix . ')' . ($ext !== '' ? ('.' . $ext) : '');
+					$suffix++;
+				}
 
-			$in = @fopen($fullPath, 'rb');
-			if (!is_resource($in)) {
-				throw new \RuntimeException('Unable to read extracted file');
-			}
-			$out = $newFile->fopen('w');
-			if (!is_resource($out)) {
+				$newFile = $destFolder->newFile($safeName);
+				$in = @fopen($fullPath, 'rb');
+				if (!is_resource($in)) {
+					throw new \RuntimeException('Unable to read extracted file');
+				}
+				$out = $newFile->fopen('w');
+				if (!is_resource($out)) {
+					@fclose($in);
+					throw new \RuntimeException('Unable to write extracted file');
+				}
+				stream_copy_to_stream($in, $out);
 				@fclose($in);
-				throw new \RuntimeException('Unable to write extracted file');
+				@fclose($out);
+				$stats['files']++;
+			} catch (\Throwable $e) {
+				$this->logger->warning('unzip.import file failed', ['app' => 'unzip', 'path' => $relativePath, 'exception' => $e]);
+				$stats['skipped']++;
+				if ($newFile !== null) {
+					try {
+						$newFile->delete();
+					} catch (\Throwable $_cleanup) {
+						// ignore
+					}
+				}
 			}
-			stream_copy_to_stream($in, $out);
-			@fclose($in);
-			@fclose($out);
-			$stats['files']++;
 		}
 		return $stats;
 	}
