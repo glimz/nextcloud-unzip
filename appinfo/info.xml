@@ -9,7 +9,7 @@ Extract supported archives (zip, rar, 7z, tar, gzip, bzip2) from the Files app m
 
 This app extracts archives into the current folder (with automatic “(1)” suffixing on conflicts).
 ]]></description>
-	<version>1.0.2</version>
+	<version>1.0.3</version>
 	<licence>agpl</licence>
 	<author mail="admin@talenttic.com">Talenttic</author>
 	<namespace>Unzip</namespace>

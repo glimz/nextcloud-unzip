@@ -16,3 +16,7 @@
 
 - Extract directly into the current folder (instead of creating a subfolder).
 - Return extracted counts (files/folders) to the UI.
+
+## 1.0.3
+
+- Refresh Files view after extracting (fallback to full page reload on Files v4).

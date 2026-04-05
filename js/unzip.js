@@ -73,7 +73,14 @@
 		try {
 			if (window.OCA && window.OCA.Files && window.OCA.Files.App && window.OCA.Files.App.fileList && typeof window.OCA.Files.App.fileList.reload === 'function') {
 				window.OCA.Files.App.fileList.reload();
+				return;
 			}
+		} catch (_e) {
+			// ignore
+		}
+		// Files v4 does not expose a stable reload API globally; fall back to a full reload.
+		try {
+			window.location.reload();
 		} catch (_e) {
 			// ignore
 		}
