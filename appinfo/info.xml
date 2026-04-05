@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<info xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:noNamespaceSchemaLocation="https://apps.nextcloud.com/schema/apps/info.xsd">
+	<id>unzip</id>
+	<name>Unzip</name>
+	<summary>Extract archive files from the Files menu</summary>
+	<description><![CDATA[
+Extract supported archives (zip, rar, 7z, tar, gzip, bzip2) from the Files app menu.
+
+This app extracts into a new folder created next to the archive file (with automatic “(1)” suffixing).
+]]></description>
+	<version>1.0.0</version>
+	<licence>agpl</licence>
+	<author mail="admin@talenttic.com">Talenttic</author>
+	<namespace>Unzip</namespace>
+	<category>files</category>
+	<website>https://github.com/glimz/nextcloud-unzip</website>
+	<bugs>https://github.com/glimz/nextcloud-unzip/issues</bugs>
+	<dependencies>
+		<nextcloud min-version="33" max-version="33"/>
+		<php min-version="8.1" max-version="8.4"/>
+	</dependencies>
+</info>
