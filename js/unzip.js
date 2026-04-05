@@ -104,11 +104,13 @@
 						const files = (typeof response.files === 'number') ? response.files : null;
 						const folders = (typeof response.folders === 'number') ? response.folders : null;
 						const skipped = (typeof response.skipped === 'number') ? response.skipped : null;
+						const target = (response && typeof response.target === 'string' && response.target) ? response.target : null;
 						const parts = [];
 						if (folders !== null) parts.push(folders + ' folders');
 						if (files !== null) parts.push(files + ' files');
 						if (skipped !== null && skipped > 0) parts.push('skipped ' + skipped);
-						notify(parts.length ? ('Extracted here (' + parts.join(', ') + ')') : 'Extracted here');
+						const prefix = target ? ('Extracted to ' + target) : 'Extracted';
+						notify(parts.length ? (prefix + ' (' + parts.join(', ') + ')') : prefix);
 						refreshFilesView();
 						resolve(true);
 						return;

@@ -59,6 +59,7 @@ class ExtractionController extends Controller {
 		if (!($parent instanceof Folder)) {
 			return new DataResponse(['code' => 0, 'desc' => 'Invalid parent folder'], 400);
 		}
+		$targetRootName = $this->archiveBaseName($archiveNode->getName());
 
 		$permissions = $archiveNode->getPermissions();
 		if (($permissions & Constants::PERMISSION_READ) === 0) {
@@ -84,11 +85,13 @@ class ExtractionController extends Controller {
 			'type' => $detectedType,
 			'archive' => $archiveNode->getName(),
 			'targetFolder' => $parent->getName(),
+			'targetRootName' => $targetRootName,
 		]);
 
 		$tmpArchive = null;
 		$tmpExtractDir = null;
 		$importStats = ['files' => 0, 'folders' => 0, 'skipped' => 0];
+		$targetRootFolder = null;
 		try {
 			[$tmpArchive, $tmpExtractDir] = $this->prepareTempExtraction($archiveNode);
 
@@ -97,7 +100,8 @@ class ExtractionController extends Controller {
 				return new DataResponse($response, 400);
 			}
 
-			$importStats = $this->importExtractedTree($tmpExtractDir, $parent);
+			$targetRootFolder = $this->createUniqueFolder($parent, $targetRootName);
+			$importStats = $this->importExtractedTree($tmpExtractDir, $targetRootFolder);
 		} catch (\Throwable $e) {
 			$this->logger->error('unzip.extract failed: ' . $e->getMessage(), ['app' => 'unzip', 'exception' => $e]);
 			return new DataResponse(['code' => 0, 'desc' => 'Extraction failed'], 400);
@@ -120,6 +124,7 @@ class ExtractionController extends Controller {
 			'fileId' => $fileId,
 			'archive' => $archiveNode->getName(),
 			'targetFolder' => $parent->getName(),
+			'targetRootName' => $targetRootName,
 			'files' => $files,
 			'folders' => $folders,
 			'skipped' => $skipped,
@@ -133,12 +138,24 @@ class ExtractionController extends Controller {
 			return new DataResponse(['code' => 0, 'desc' => $desc, 'skipped' => $skipped]);
 		}
 
+		try {
+			if ($targetRootFolder instanceof Folder) {
+				$targetRootFolder->getStorage()->getScanner()->scan($targetRootFolder->getInternalPath(), true);
+			}
+		} catch (\Throwable $e) {
+			$this->logger->warning('Extraction scan warning: ' . $e->getMessage());
+		}
+
 		$response = [
 			'code' => 1,
 			'files' => $files,
 			'folders' => $folders,
 			'skipped' => $skipped,
+			'target' => $targetRootName,
 		];
+		if ($targetRootFolder instanceof Folder) {
+			$response['targetId'] = $targetRootFolder->getId();
+		}
 		if ($skipped > 0) {
 			$response['desc'] = 'Some entries were skipped';
 		}
@@ -291,6 +308,45 @@ class ExtractionController extends Controller {
 			$current = $current->newFolder($part);
 		}
 		return $current;
+	}
+
+	private function createUniqueFolder(Folder $parent, string $baseName): Folder {
+		$name = trim($baseName);
+		if ($name === '' || $name === '.' || $name === '..') {
+			$name = 'Extracted';
+		}
+
+		$suffix = 1;
+		$finalName = $name;
+		while ($parent->nodeExists($finalName)) {
+			$finalName = $name . ' (' . $suffix . ')';
+			$suffix++;
+		}
+		return $parent->newFolder($finalName);
+	}
+
+	private function archiveBaseName(string $archiveName): string {
+		$lower = strtolower($archiveName);
+		$known = [
+			'.tar.gz',
+			'.tar.bz2',
+			'.tar.xz',
+			'.tgz',
+			'.zip',
+			'.rar',
+			'.7z',
+			'.tar',
+			'.gz',
+			'.bz2',
+			'.xz',
+			'.deb',
+		];
+		foreach ($known as $ext) {
+			if (str_ends_with($lower, $ext)) {
+				return substr($archiveName, 0, -strlen($ext));
+			}
+		}
+		return pathinfo($archiveName, PATHINFO_FILENAME);
 	}
 
 	private function deleteDirectoryRecursive(string $dir): void {

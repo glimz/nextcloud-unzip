@@ -26,3 +26,7 @@
 - Skip macOS metadata (`__MACOSX`, `._*`, `.DS_Store`) during import.
 - Include skipped count in the UI.
 - Improve server response for “nothing extracted” cases.
+
+## 1.0.5
+
+- Extract into a new folder named after the archive (with “(1)” suffix on conflicts), matching the behavior of the classic `extract` app.
