@@ -77,20 +77,18 @@ class ExtractionController extends Controller {
 			return new DataResponse(['code' => 0, 'desc' => 'Unsupported archive type'], 400);
 		}
 
-		$folderName = $this->makeTargetFolderName($archiveNode->getName(), $parent);
-		$targetNode = $parent->newFolder($folderName);
-
 		$this->logger->info('unzip.extract start', [
 			'app' => 'unzip',
 			'user' => $this->userId,
 			'fileId' => $fileId,
 			'type' => $detectedType,
 			'archive' => $archiveNode->getName(),
-			'targetFolder' => $targetNode->getName(),
+			'targetFolder' => $parent->getName(),
 		]);
 
 		$tmpArchive = null;
 		$tmpExtractDir = null;
+		$importStats = ['files' => 0, 'folders' => 0, 'skipped' => 0];
 		try {
 			[$tmpArchive, $tmpExtractDir] = $this->prepareTempExtraction($archiveNode);
 
@@ -99,14 +97,9 @@ class ExtractionController extends Controller {
 				return new DataResponse($response, 400);
 			}
 
-			$this->importExtractedTree($tmpExtractDir, $targetNode);
+			$importStats = $this->importExtractedTree($tmpExtractDir, $parent);
 		} catch (\Throwable $e) {
 			$this->logger->error('unzip.extract failed: ' . $e->getMessage(), ['app' => 'unzip']);
-			try {
-				$targetNode->delete();
-			} catch (\Throwable $cleanupError) {
-				$this->logger->warning('Failed to cleanup target folder after extraction failure: ' . $cleanupError->getMessage());
-			}
 			return new DataResponse(['code' => 0, 'desc' => 'Extraction failed'], 400);
 		} finally {
 			if (is_string($tmpArchive) && $tmpArchive !== '' && is_file($tmpArchive)) {
@@ -118,12 +111,17 @@ class ExtractionController extends Controller {
 		}
 
 		try {
-			$targetNode->getStorage()->getScanner()->scan($targetNode->getInternalPath(), true);
+			$parent->getStorage()->getScanner()->scan($parent->getInternalPath(), true);
 		} catch (\Throwable $e) {
 			$this->logger->warning('Extraction scan warning: ' . $e->getMessage());
 		}
 
-		return new DataResponse(['code' => 1, 'folder' => $targetNode->getName()]);
+		return new DataResponse([
+			'code' => 1,
+			'files' => (int)($importStats['files'] ?? 0),
+			'folders' => (int)($importStats['folders'] ?? 0),
+			'skipped' => (int)($importStats['skipped'] ?? 0),
+		]);
 	}
 
 	/**
@@ -157,7 +155,11 @@ class ExtractionController extends Controller {
 		return [$tmpArchivePath, $tmpExtractDir];
 	}
 
-	private function importExtractedTree(string $extractDir, Folder $targetFolder): void {
+	/**
+	 * @return array{files:int,folders:int,skipped:int}
+	 */
+	private function importExtractedTree(string $extractDir, Folder $targetFolder): array {
+		$stats = ['files' => 0, 'folders' => 0, 'skipped' => 0];
 		$iterator = new \RecursiveIteratorIterator(
 			new \RecursiveDirectoryIterator($extractDir, \FilesystemIterator::SKIP_DOTS),
 			\RecursiveIteratorIterator::SELF_FIRST
@@ -169,17 +171,20 @@ class ExtractionController extends Controller {
 			$relativePath = substr($fullPath, strlen(rtrim($extractDir, DIRECTORY_SEPARATOR)) + 1);
 			$relativePath = str_replace('\\', '/', $relativePath);
 			if ($relativePath === '' || str_contains($relativePath, "\0") || str_contains($relativePath, '../') || str_starts_with($relativePath, '../')) {
+				$stats['skipped']++;
 				continue;
 			}
 
 			if ($node->isDir()) {
 				$this->ensureFolder($targetFolder, $relativePath);
+				$stats['folders']++;
 				continue;
 			}
 
 			$dirName = str_contains($relativePath, '/') ? dirname($relativePath) : '.';
 			$fileName = basename($relativePath);
 			if (Filesystem::isFileBlacklisted($fileName)) {
+				$stats['skipped']++;
 				continue;
 			}
 			$destFolder = $dirName === '.' ? $targetFolder : $this->ensureFolder($targetFolder, $dirName);
@@ -205,7 +210,9 @@ class ExtractionController extends Controller {
 			stream_copy_to_stream($in, $out);
 			@fclose($in);
 			@fclose($out);
+			$stats['files']++;
 		}
+		return $stats;
 	}
 
 	private function ensureFolder(Folder $base, string $path): Folder {
@@ -277,17 +284,4 @@ class ExtractionController extends Controller {
 		return null;
 	}
 
-	private function makeTargetFolderName(string $archiveName, Folder $parent): string {
-		$baseName = pathinfo($archiveName, PATHINFO_FILENAME);
-		if (pathinfo($baseName, PATHINFO_EXTENSION) === 'tar') {
-			$baseName = pathinfo($baseName, PATHINFO_FILENAME);
-		}
-		$name = $baseName !== '' ? $baseName : 'archive';
-		$counter = 1;
-		while ($parent->nodeExists($name)) {
-			$name = $baseName . ' (' . $counter . ')';
-			$counter++;
-		}
-		return $name;
-	}
 }

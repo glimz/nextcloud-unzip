@@ -11,3 +11,8 @@
 
 - Support extracting archives from non-local storages (e.g. external mounts) by extracting to a temp dir then importing into the target folder.
 - Show server JSON error messages in the UI on HTTP 400 responses.
+
+## 1.0.2
+
+- Extract directly into the current folder (instead of creating a subfolder).
+- Return extracted counts (files/folders) to the UI.

@@ -6,8 +6,8 @@ Repository: https://github.com/glimz/nextcloud-unzip
 
 ## Behavior
 
-- Extracts the archive into a new folder created **next to the archive file**.
-- Folder name is based on the archive name and automatically suffixes with ` (1)`, ` (2)`, … if needed.
+- Extracts the archive **into the current folder** (next to the archive file).
+- If extracted files already exist, names are automatically suffixed with ` (1)`, ` (2)`, ….
 
 ## Supported formats
 

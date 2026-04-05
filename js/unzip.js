@@ -94,7 +94,12 @@
 				data: { fileId, type },
 				success: function (response) {
 					if (response && response.code === 1) {
-						notify('Extracted to: ' + (response.folder || 'archive'));
+						const files = (typeof response.files === 'number') ? response.files : null;
+						const folders = (typeof response.folders === 'number') ? response.folders : null;
+						const parts = [];
+						if (folders !== null) parts.push(folders + ' folders');
+						if (files !== null) parts.push(files + ' files');
+						notify(parts.length ? ('Extracted here (' + parts.join(', ') + ')') : 'Extracted here');
 						refreshFilesView();
 						resolve(true);
 						return;

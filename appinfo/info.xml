@@ -7,9 +7,9 @@
 	<description><![CDATA[
 Extract supported archives (zip, rar, 7z, tar, gzip, bzip2) from the Files app menu.
 
-This app extracts into a new folder created next to the archive file (with automatic “(1)” suffixing).
+This app extracts archives into the current folder (with automatic “(1)” suffixing on conflicts).
 ]]></description>
-	<version>1.0.1</version>
+	<version>1.0.2</version>
 	<licence>agpl</licence>
 	<author mail="admin@talenttic.com">Talenttic</author>
 	<namespace>Unzip</namespace>
